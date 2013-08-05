@@ -1,0 +1,103 @@
+#!/bin/bash
+
+root_check() {
+    [[ $EUID != 0 ]] && err "Please run as root."
+}
+
+args_check() {
+    [[ $1 -lt $2 || $1 -gt $3 ]] && err "Please use the right amount of arguments (use -h for help)."
+}
+
+err() {
+    echo "Error: $1" 1>&2; exit 1
+}
+
+kernel_usage() {
+    echo "Usage: mhwd-kernel [option]
+    -h  --help              Show this help message
+    -i  --install           Install a new kernel        [kernel(s)] [optional: rmc = remove current kernel]
+    -l  --list              List all available kernels
+    -li --listinstalled     List installed kernels
+    -r  --remove            Remove a kernel             [kernel(s)]"
+}
+
+kernel_install() {
+    pkginstall=()
+    rmc=0
+
+    for kernel in "$@"; do
+        [[ $kernel = "rmc" ]] && rmc=1 && continue
+        [[ $kernel != linux[0-9][0-9]?([0-9]) && $kernel != "rmc" ]] && err "Invalid argument (use -h for help)."
+        [[ $kernel != linux[0-9][0-9]?([0-9]) ]] && err "Please enter a valid kernel name."
+        [[ $current = $kernel ]] && err "You can't reinstall your current kernel. Please use 'pacman -Syu' instead to update."
+        [[ -z $(pacman -Ssq "^$kernel$") ]] && err "Please make sure if the given kernel(s) exist(s)."
+        
+        for pkg in $(pacman -Qqs "$current"); do
+            pkg=${pkg//$current/$kernel}
+            [[ -n $(pacman -Ssq "^$pkg$") ]] && pkginstall+=("$pkg")
+        done
+    done
+
+    pacman -Syy
+
+    pacman -S "${pkginstall[@]}"
+
+    [[ $rmc = 1 && $? = 0 ]] && pacman -R $(pacman -Qqs $current)
+    [[ $rmc = 1 && $? != 0 ]] && { echo ""; err "'rmc' aborted because the kernel failed to install or canceled on removal."; }
+}
+
+kernel_repo() {
+    echo "Available kernels:"
+    pacman -Ss "^linux[0-9][0-9]?([0-9])$" | grep core | while read -r; do echo "   * ${REPLY:5:8}"; done
+}
+
+kernel_list() {
+    echo "Currently running: $(uname -r) (${current})"
+    echo "The following kernels are installed in your system:"
+    pacman -Qqs "^linux[0-9][0-9]?([0-9])$" | while read -r; do echo "   * $REPLY"; done
+}
+
+kernel_remove() {
+    pkgremove=()
+
+    for kernel in "$@"; do
+        [[  -z "$kernel" ]] && err "Invalid argument (use -h for help)."
+        [[ $kernel != linux[0-9][0-9]?([0-9]) ]] && err "Please enter a valid kernel name."
+        [[ $current = $kernel ]] && err "You can't remove your current kernel."
+        [[ -z $(pacman -Qqs "^$1$") ]] && err "Kernel not installed."
+
+        for pkg in $(pacman -Qqs "$kernel"); do
+            pkgremove+=("$pkg")
+        done
+    done
+
+    pacman -R "${pkgremove[@]}"
+}
+
+IFS=. read -r major minor _ <<< "$(uname -r)"
+current="linux$major$minor"
+
+case "$1" in
+    -h | --help)            args_check $# 1 1
+                            kernel_usage
+                            exit 0;;
+    -i | --install)         shift
+                            root_check
+                            kernel_install $@
+                            exit 0 ;;
+    -l | --list)            args_check $# 1 1
+                            kernel_repo
+                            exit 0 ;;
+    -li| --listinstalled)   args_check $# 1 1
+                            kernel_list
+                            exit 0 ;;
+    -r | --remove)          shift
+                            root_check
+                            kernel_remove $@
+                            exit 0 ;;
+    -*)                     err "Invalid argument (use -h for help)." ;;
+    *)                      err "No arguments given (use -h for help)." ;;
+esac
+
+
+
